@@ -30,19 +30,30 @@
 #define _dp(n, fmt, args...)
 #endif	/* DEBUG_LEVEL_ */
 
+#define IP_ALEN 4
+
+typedef struct _arp_address{
+	uint8_t sha[ETH_ALEN];
+	uint8_t sip[IP_ALEN];
+	uint8_t tha[ETH_ALEN];
+	uint8_t tip[IP_ALEN];
+}arp_address;
 
 void usage();
 void convrt_mac(const char *, char *, int);
-int getMacAddress(char *);
+int getMacAddress(uint8_t *);
+void send_arp(pcap_t *, arp_address, bool); 
+void delete_dot(char *, uint8_t *);
+
 
 int main(int argc, char* argv[]) {
-	char test [15]={0,};
-	if (argc != 2) {
-		usage(); return -1;
-	}
-
 	char* dev = argv[1];
 	char errbuf[PCAP_ERRBUF_SIZE];
+	arp_address address;
+
+	if (argc != 4) {
+		usage(); return -1;
+	}
 
 	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
 
@@ -50,10 +61,12 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "couldn't open device %s: %s\n", dev, errbuf);
 		return -1;
 	}
-	getMacAddress(test);
-	printf("%s\n",test);
+	getMacAddress(address.sha);
 
-
+	delete_dot(argv[2],address.sip);
+	for(int i = 0; i < 4; i++){
+		printf("%2d:", address.sip[i]);
+	}
 	/*while (true) {
 	  struct pcap_pkthdr* header;
 	  const u_char* packet;
@@ -67,17 +80,56 @@ int main(int argc, char* argv[]) {
 	return 0;
 }
 
+void send_arp(pcap_t * handle,arp_address *address, bool attack){
+	struct ether_header ether;
+	struct arphdr arp;
+	uint8_t *packet;
+	uint32_t size;
+	
+	size = sizeof(ether) + sizeof(arp) + sizeof(address);
+	packet = (uint8_t *)malloc(size);
+
+	memcpy(ether.ether_dhost,address->tha,ETH_ALEN);
+	memcpy(ether.ether_shost,address->sha,ETH_ALEN);
+	ether.ether_type = ETHERTYPE_ARP;
+
+	arp.ar_hrd = ARPHRD_ETHER; 
+	arp.ar_pro = ETHERTYPE_IP; 
+	arp.ar_hln = ETH_ALEN;
+	arp.ar_pln = IP_ALEN;
+	arp.ar_op = ARPOP_REQUEST; 
+
+	if (attack){
+		memset(address->tha,0x0,ETH_ALEN);
+		memset(ether.ether_dhost,0xff,ETH_ALEN);
+		arp.ar_op = ARPOP_REPLY;
+	}
+	
+	memcpy(packet,&ether,sizeof(ether));
+	memcpy(packet+sizeof(ether),&arp,sizeof(arp));
+	memcpy(packet+size-sizeof(address),address,sizeof(address));
+	pcap_sendpacket(handle,packet,size);
+}
+
+void delete_dot(char *src, uint8_t *des){
+	char *token;
+	token = strtok(src,".");
+	do{
+		*des = static_cast<uint8_t>(atoi(token));	
+		des++;
+	}while(token = strtok(NULL,"."));
+	return;
+}
+
 void usage() {
 	printf("syntax: send_arp <interface> <sender ip> <target ip>\n");
 	printf("sample: send_arp wlan0 192.168.10.2 192.168.10.1\n");
 }
 
-int getMacAddress(char *mac)
+int getMacAddress(uint8_t *mac)
 {
-
 	int sock;
 	struct ifreq ifr;
-	char mac_adr[18] = {0,};
 	sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (sock < 0) 
 	{
@@ -91,10 +143,9 @@ int getMacAddress(char *mac)
 		close(sock);
 		return 0;
 	}
-	//convert format ex) 00:00:00:00:00:00
-	//	convrt_mac( ether_ntoa((struct ether_addr *)(ifr.ifr_hwaddr.sa_data)), mac_adr, sizeof(mac_adr) -1 );
-	strcpy(mac, ether_ntoa((struct ether_addr *)ifr.ifr_hwaddr.sa_data));
-	close(sock);
+	for(int i = 0; i < 6; i++){
+		mac[i] = (uint8_t)ifr.ifr_hwaddr.sa_data[i];
+	}
 	return 1;
 }
 
